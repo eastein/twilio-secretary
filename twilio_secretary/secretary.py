@@ -1,7 +1,8 @@
 import uuid
 import random
 import time
-from .services import TwilioActions
+import twilio_api
+import os
 
 from .datediff import differ
 
@@ -43,12 +44,15 @@ class SecretaryState(object):
             return '%s ago: %s' % (differ(int(time.time() - ts)), text)
 
     @classmethod
-    def get_number_name(cls, number):
+    def get_number_name(cls, number, generate_name=True):
         seen_names = set()
         for (stored_number, stored_name) in cls.NUMBER_MAP:
             if number == stored_number:
                 return stored_name
             seen_names.add(stored_name.lower())
+
+        if not generate_name:
+            return None
 
         namefrags = ['red', 'pup', 'rocket', 'turtle', 'blue']
         random.shuffle(namefrags)
@@ -81,17 +85,27 @@ class SecretaryState(object):
         return False
 
     @classmethod
+    def name(cls, number, name):
+        for i in range(len(cls.NUMBER_MAP)):
+            existing_number, existing_name = cls.NUMBER_MAP[i]
+            if number == existing_number:
+                cls.NUMBER_MAP[i] = (existing_number, name)
+                return True
+        cls.NUMBER_MAP.append((number, name))
+        return True
+
+    @classmethod
     def get_name_number(cls, name):
         for (stored_number, stored_name) in cls.NUMBER_MAP:
             if name.lower() == stored_name.lower():
                 return stored_number
 
 
-class TwilioSecretary(TwilioActions):
+class TwilioSecretary(twilio_api.Twilio):
     MASTERS_NAME = 'Donna and Eric'
 
     def __init__(self):
-        TwilioActions.__init__(self)
+        twilio_api.Twilio.__init__(self, os.getenv('SETTINGS_JSON'))
 
     def on_sms(self, from_number, text):
         print 'hey handling text from %s, text is %s' % (from_number, text)
@@ -109,7 +123,7 @@ class TwilioSecretary(TwilioActions):
             if len(tokens) == 2:
                 argument = tokens[1]
 
-            if command in ['update', 'tell', 'rename']:
+            if command in ['update', 'tell', 'rename', 'name', 'subscribers']:
                 if not is_admin:
                     self.send_sms(from_number, "You can't use that feature, sorry.")
                     return
@@ -125,10 +139,34 @@ class TwilioSecretary(TwilioActions):
                         sent += 1
                     self.send_sms(from_number, "Sent update to %d subscribers." % sent)
                     return
-                elif command in ['tell', 'rename']:
+                elif command == 'subscribers':
+                    subscribers = []
+                    for sub_number in SecretaryState.SUBSCRIBERS:
+                        sub_name = SecretaryState.get_number_name(sub_number, generate_name=False)
+                        if sub_name is None:
+                            sub_name = sub_number
+                        else:
+                            sub_name = '%s (%s)' % (sub_name, sub_number)
+                        subscribers.append(sub_name)
+
+                    if not subscribers:
+                        self.send_sms(from_number, 'There are no subscribers.')
+                        return
+
+                    sub_text = subscribers[0]
+                    for subscriber in subscribers[1:]:
+                        if sub_text + len(subscriber) + 2 > 160:
+                            self.send_sms(from_number, sub_text)
+                            sub_text = subscriber
+                        else:
+                            sub_text += ', ' + subscriber
+                    self.send_sms(from_number, sub_text)
+                    return
+                elif command in ['tell', 'rename', 'name']:
                     arguments_needed = {
                         'tell': "name and a message",
                         'rename': "oldname and newname",
+                        'name': 'number and name'
                     }[command]
 
                     if argument is None:
@@ -156,9 +194,15 @@ class TwilioSecretary(TwilioActions):
                         else:
                             self.send_sms(from_number, "I don't know who %s is." % oldname)
                         return
-            elif command == 'hello':
+                    elif command == 'name':
+                        number, name = frags
+                        name = name.split(' ', 1)[0]  # in case we have a space in a name, cut it
+                        if SecretaryState.name(number, name):
+                            self.send_sms(from_number, "Stored name %s for number %s." % (name, number))
+                        return
+            elif command == 'msg':
                 if argument is None:
-                    self.send_sms(from_number, "Hey, give some text after Hello to send a message.")
+                    self.send_sms(from_number, "Hey, give some text after MSG to send a message.")
                 else:
                     from_name = SecretaryState.get_number_name(from_number)
                     self.send_sms_to_masters("From %s (%s): %s" % (from_name, from_number, argument))
@@ -180,10 +224,10 @@ class TwilioSecretary(TwilioActions):
                     self.send_sms(from_number, "You are already unsubscribed!")
                 return
 
-        help_text = 'Text options:\nSUBSCRIBE (Get text updates)\nMSG [Followed by text message to %s]\nSTOP (Stop text updates)' % self.MASTERS_NAME
+        help_text = 'Text options:\nSUBSCRIBE (Get text updates)\nMSG [Followed by message for %s]\nSTOP (Stop text updates)' % self.MASTERS_NAME
 
         if is_admin:
-            help_text += '\nUPDATE [Followed by broadcast message]\nTELL [name] [message]\nRENAME [oldname] [newname]'
+            help_text += '\nUPDATE [Followed by broadcast message]\nTELL [name] [message]\nRENAME [oldname] [newname]\nNAME [number] [name]\nSUBSCRIBERS (lists subscribers)'
 
         print 'sending help to %s' % from_number
         self.send_sms(from_number, help_text)
