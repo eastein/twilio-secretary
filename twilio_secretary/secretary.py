@@ -4,36 +4,69 @@ import time
 import twilio_api
 import os
 
+import json
+import threading
+
 from .datediff import differ
 
 
 class SecretaryState(object):
-    # oh jeez man don't use class members as a state store it's not persistent *crying*
-    # oh man oh jeez TODO
+    LOCK = threading.Lock()
+    DIRTY = False
+
+    # set of text formatted phone numbers
     SUBSCRIBERS = set()
+    # list of tuples of time, text
     UPDATES = []
     # list of tuples of number, name
     NUMBER_MAP = []
 
     @classmethod
+    def to_doc(cls):
+        return {
+            'subscribers': list(cls.SUBSCRIBERS),
+            'updates': [list(u) for u in cls.UPDATES],
+            'number_map': [list(nn) for nn in cls.NUMBER_MAP],
+        }
+
+    @classmethod
+    def from_doc(cls, doc):
+        cls.SUBSCRIBERS = set(doc['subscribers'])
+        cls.UPDATES = [tuple(u) for u in doc['updates']]
+        cls.NUMBER_MAP = [tuple(nn) for nn in doc['number_map']]
+        cls.DIRTY = True
+
+    @classmethod
+    def from_disk(cls):
+        fn = SecretarySettings.get_settings()['STORE_JSON']
+        if os.path.exists(fn):
+            cls.from_doc(json.load(open(fn)))
+
+    @classmethod
     def remove_subscriber(cls, number):
-        if number in cls.SUBSCRIBERS:
-            cls.SUBSCRIBERS.remove(number)
-            return True
-        else:
-            return False
+        with cls.LOCK:
+            if number in cls.SUBSCRIBERS:
+                cls.SUBSCRIBERS.remove(number)
+                cls.DIRTY = True
+                return True
+            else:
+                return False
 
     @classmethod
     def add_subscriber(cls, number):
-        if number in cls.SUBSCRIBERS:
-            return False
-        else:
-            cls.SUBSCRIBERS.add(number)
-            return True
+        with cls.LOCK:
+            if number in cls.SUBSCRIBERS:
+                return False
+            else:
+                cls.SUBSCRIBERS.add(number)
+                cls.DIRTY = True
+                return True
 
     @classmethod
     def add_update(cls, update_text):
-        cls.UPDATES.append((time.time(), update_text))
+        with cls.LOCK:
+            cls.UPDATES.append((time.time(), update_text))
+            cls.DIRTY = True
 
     @classmethod
     def format_update(cls, update):
@@ -45,54 +78,60 @@ class SecretaryState(object):
         if len(cls.UPDATES) == 0:
             return 'There is no info saved right now.'
         else:
-            return cls.format_update(cls.UPDATES[-1])
+            with cls.LOCK:
+                return cls.format_update(cls.UPDATES[-1])
 
     @classmethod
     def recent_updates(cls, count=3):
-        updates = cls.UPDATES[-count:]
-        updates.reverse()
-        return updates
+        with cls.LOCK:
+            updates = cls.UPDATES[-count:]
+            updates.reverse()
+            return updates
 
     @classmethod
     def get_number_name(cls, number, generate_name=True):
-        seen_names = set()
-        for (stored_number, stored_name) in cls.NUMBER_MAP:
-            if number == stored_number:
-                return stored_name
-            seen_names.add(stored_name.lower())
+        with cls.LOCK:
+            seen_names = set()
+            for (stored_number, stored_name) in cls.NUMBER_MAP:
+                if number == stored_number:
+                    return stored_name
+                seen_names.add(stored_name.lower())
 
-        if not generate_name:
-            return None
+            if not generate_name:
+                return None
 
-        namefrags = ['red', 'pup', 'rocket', 'turtle', 'blue']
-        random.shuffle(namefrags)
-        # ok we didn't get a name for this person.
-        name = None
-        for i in range(1, 1000):
-            for prefix in namefrags:
-                potential_name = '%s%d' % (prefix, i)
-                if potential_name not in seen_names:
-                    name = potential_name
+            namefrags = ['red', 'pup', 'rocket', 'turtle', 'blue']
+            random.shuffle(namefrags)
+            # ok we didn't get a name for this person.
+            name = None
+            for i in range(1, 1000):
+                for prefix in namefrags:
+                    potential_name = '%s%d' % (prefix, i)
+                    if potential_name not in seen_names:
+                        name = potential_name
+                        break
+                if name is not None:
                     break
-            if name is not None:
-                break
 
-        if name is None:
-            name = str(uuid.uuid4())[0:8]
+            if name is None:
+                name = str(uuid.uuid4())[0:8]
 
-        cls.NUMBER_MAP.append((number, name))
+            cls.NUMBER_MAP.append((number, name))
+            cls.DIRTY = True
 
-        return name
+            return name
 
     @classmethod
     def rename(cls, old_name, new_name):
-        old_name = old_name.lower()
-        for i in range(len(cls.NUMBER_MAP)):
-            existing_number, existing_name = cls.NUMBER_MAP[i]
-            if old_name.lower() == existing_name.lower():
-                cls.NUMBER_MAP[i] = (existing_number, new_name)
-                return True
-        return False
+        with cls.LOCK:
+            old_name = old_name.lower()
+            for i in range(len(cls.NUMBER_MAP)):
+                existing_number, existing_name = cls.NUMBER_MAP[i]
+                if old_name.lower() == existing_name.lower():
+                    cls.NUMBER_MAP[i] = (existing_number, new_name)
+                    cls.DIRTY = True
+                    return True
+            return False
 
     @classmethod
     def name(cls, number, name):
@@ -100,8 +139,10 @@ class SecretaryState(object):
             existing_number, existing_name = cls.NUMBER_MAP[i]
             if number == existing_number:
                 cls.NUMBER_MAP[i] = (existing_number, name)
+                cls.DIRTY = True
                 return True
         cls.NUMBER_MAP.append((number, name))
+        cls.DIRTY = True
         return True
 
     @classmethod
@@ -111,10 +152,38 @@ class SecretaryState(object):
                 return stored_number
 
 
+class SecretarySettings(object):
+    SETTINGS_DATA = None
+    SETTINGS_RDLOCK = threading.Lock()
+
+    @classmethod
+    def get_settings(cls):
+        if cls.SETTINGS_DATA is None:
+            with cls.SETTINGS_RDLOCK:
+                cls.SETTINGS_DATA = json.load(open(os.getenv('SETTINGS_JSON')))
+        return cls.SETTINGS_DATA
+
+
 class TwilioSecretary(twilio_api.Twilio):
 
     def __init__(self):
-        twilio_api.Twilio.__init__(self, os.getenv('SETTINGS_JSON'))
+        twilio_api.Twilio.__init__(self, SecretarySettings.get_settings())
+
+    def write_if_dirty(self):
+        with SecretaryState.LOCK:
+            if SecretaryState.DIRTY:
+                fn = self.settings['STORE_JSON']
+                fn_inprog = fn + '.inprog-%s' % str(uuid.uuid4())
+                fh = open(fn_inprog, 'w')
+
+                json.dump(SecretaryState.to_doc(), fh)
+                fh.close()
+
+                os.rename(fn_inprog, fn)
+
+                print 'wrote json to disk'
+            else:
+                print 'nothing to write, no change'
 
     def on_sms(self, from_number, text):
         print 'hey handling text from %s, text is %s' % (from_number, text)

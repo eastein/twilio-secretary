@@ -1,22 +1,22 @@
 from twilio.rest import TwilioRestClient
 import json
 
-class Twilio(object) :
-    def process_number(self, num) :
+
+class Twilio(object):
+
+    def process_number(self, num):
         num = str(num)
         num = num.replace('-', '').replace(' ', '').replace('(', '').replace(')', '').replace('+', '')
-        if len(num) == 10 :
+        if len(num) == 10:
             # behold my amero-centrism
             num = '1' + num
         return '+' + num
 
-    def __init__(self, settings_filename=None) :
-        if settings_filename is None:
-            raise RuntimeError("Need a settings filename.")
-        self.settings = json.load(open(settings_filename))
+    def __init__(self, settings):
+        self.settings = settings
         self.client = TwilioRestClient(self.settings['SID'], self.settings['TOKEN'])
 
-    def send_sms(self, to, text) :
+    def send_sms(self, to, text):
         if not isinstance(to, list):
             to = [to]
 

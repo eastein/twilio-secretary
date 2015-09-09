@@ -2,6 +2,8 @@ from flask import request, Flask, render_template
 
 from .secretary import TwilioSecretary, SecretaryState
 
+SecretaryState.from_disk()
+
 app = Flask(__name__)
 
 
@@ -19,6 +21,7 @@ def inbound_sms():
             return 'sorry but i dunno who you are buddy', 403
 
         tws.on_sms(request.form['From'], request.form['Body'])
+        tws.write_if_dirty()
         return "OK", 200
     except:
         import traceback
