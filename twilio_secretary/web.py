@@ -15,7 +15,6 @@ def root():
 @app.route('/inbound-sms/', methods=['POST'])
 def inbound_sms():
     try:
-
         tws = TwilioSecretary()
         if not tws.check_sid(request.form['AccountSid']):
             return 'sorry but i dunno who you are buddy', 403
@@ -45,7 +44,8 @@ def updates():
         updates = [SecretaryState.format_update(update) for update in SecretaryState.recent_updates(count=5)]
         tws = TwilioSecretary()
         return render_template('latest.html', phone_number=tws.settings['PHONE_NUMBER'], updates=updates,
-                               master_name=tws.settings['MASTERS_NAME'])
+                               master_name=tws.settings['MASTERS_NAME'],
+                               subscriber_count=SecretaryState.subscriber_count())
     except:
         import traceback
         traceback.print_exc()

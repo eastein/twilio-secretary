@@ -63,6 +63,11 @@ class SecretaryState(object):
                 return True
 
     @classmethod
+    def subscriber_count(cls):
+        with cls.LOCK:
+            return len(cls.SUBSCRIBERS)
+
+    @classmethod
     def add_update(cls, update_text):
         with cls.LOCK:
             cls.UPDATES.append((time.time(), update_text))
@@ -180,6 +185,7 @@ class TwilioSecretary(twilio_api.Twilio):
                 fh.close()
 
                 os.rename(fn_inprog, fn)
+                SecretaryState.DIRTY = False
 
                 print 'wrote json to disk'
             else:
