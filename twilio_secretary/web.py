@@ -1,4 +1,4 @@
-from flask import request, Flask
+from flask import request, Flask, render_template
 
 from .secretary import TwilioSecretary, SecretaryState
 
@@ -31,6 +31,18 @@ def inbound_call():
         tws = TwilioSecretary()
 
         return '<?xml version="1.0" encoding="UTF-8"?><Response><Say voice="woman">%s. To find out more, text this number.</Say></Response>' % SecretaryState.current_update(), 200
+    except:
+        import traceback
+        traceback.print_exc()
+
+
+@app.route('/updates/')
+def updates():
+    try:
+        updates = [SecretaryState.format_update(update) for update in SecretaryState.recent_updates(count=5)]
+        tws = TwilioSecretary()
+        return render_template('latest.html', phone_number=tws.settings['PHONE_NUMBER'], updates=updates,
+                               master_name=tws.settings['MASTERS_NAME'])
     except:
         import traceback
         traceback.print_exc()

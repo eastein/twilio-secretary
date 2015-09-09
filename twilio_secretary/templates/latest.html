@@ -1,0 +1,50 @@
+<html>
+    <head>
+        <title>Latest Updates</title>
+        <meta http-equiv="refresh" content="30">
+
+        <style>
+            h1 {
+                font-size: 2em;
+                margin: 0.67em 0px;
+                line-height: 1.2em;
+            }
+
+            h1, h2, h3 {
+                font-family: "freight-sans-pro";
+                text-rendering: optimizelegibility;
+                text-transform: none;
+                letter-spacing: 1px;
+                font-weight: 300;
+                font-style: normal;
+                margin: 1em 0px 0.5em;
+            }
+
+            html {
+                font-family: sans-serif;
+            }
+        </style>
+    </head>
+    <body>
+        <div>
+            <h2 style="margin-top: 0px;">Latest Updates</h2>
+
+            {% if updates %}
+                <ul>
+                {% for update in updates %}
+                    <li>{{ update }}</li>
+                {% endfor %}
+                </ul>
+            {% else %}
+                Sorry, there aren't any updates.
+            {% endif %}
+        </div>
+        <div>
+            <h3>SMS/Texting updates!</h3>
+            <ul>
+                <li>To subscribe to text updates, text <b>SUBSCRIBE</b> to {{ phone_number }}. If you don't want them anymore, text <b>STOP</b>.</li>
+                <li>To contact {{ master_name }}, text <b>MSG <i>your message here</i></b> to {{ phone_number }}</li>
+            </ul>
+        </div>
+    </body>
+</html>

@@ -36,12 +36,22 @@ class SecretaryState(object):
         cls.UPDATES.append((time.time(), update_text))
 
     @classmethod
+    def format_update(cls, update):
+        ts, text = update
+        return '%s ago: %s' % (differ(int(time.time() - ts)), text)
+
+    @classmethod
     def current_update(cls):
         if len(cls.UPDATES) == 0:
             return 'There is no info saved right now.'
         else:
-            ts, text = cls.UPDATES[-1]
-            return '%s ago: %s' % (differ(int(time.time() - ts)), text)
+            return cls.format_update(cls.UPDATES[-1])
+
+    @classmethod
+    def recent_updates(cls, count=3):
+        updates = cls.UPDATES[-count:]
+        updates.reverse()
+        return updates
 
     @classmethod
     def get_number_name(cls, number, generate_name=True):
@@ -102,7 +112,6 @@ class SecretaryState(object):
 
 
 class TwilioSecretary(twilio_api.Twilio):
-    MASTERS_NAME = 'Donna and Eric'
 
     def __init__(self):
         twilio_api.Twilio.__init__(self, os.getenv('SETTINGS_JSON'))
@@ -224,7 +233,8 @@ class TwilioSecretary(twilio_api.Twilio):
                     self.send_sms(from_number, "You are already unsubscribed!")
                 return
 
-        help_text = 'Text options:\nSUBSCRIBE (Get text updates)\nMSG [Followed by message for %s]\nSTOP (Stop text updates)' % self.MASTERS_NAME
+        help_text = 'Text options:\nSUBSCRIBE (Get text updates)\nMSG [Followed by message for %s]\nSTOP (Stop text updates)' % self.settings[
+            'MASTERS_NAME']
 
         if is_admin:
             help_text += '\nUPDATE [Followed by broadcast message]\nTELL [name] [message]\nRENAME [oldname] [newname]\nNAME [number] [name]\nSUBSCRIBERS (lists subscribers)'
