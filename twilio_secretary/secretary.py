@@ -4,6 +4,7 @@ import time
 import twilio_api
 import os
 import re
+import copy
 
 import json
 import threading
@@ -21,6 +22,21 @@ class SecretaryState(object):
     UPDATES = []
     # list of tuples of number, name
     NUMBER_MAP = []
+    # polls are like this:
+    """
+    [
+        {
+            'question': 'text here?',
+            'answers': ["answer1", "answer2"],
+            'responses': {
+                '312.......': <integer answer, translated from based on 1 to base 0>,
+                ...
+            }
+        },
+        ...
+    ]
+    """
+    POLLS = []
 
     @classmethod
     def to_doc(cls):
@@ -28,6 +44,7 @@ class SecretaryState(object):
             'subscribers': list(cls.SUBSCRIBERS),
             'updates': [list(u) for u in cls.UPDATES],
             'number_map': [list(nn) for nn in cls.NUMBER_MAP],
+            'polls': cls.POLLS
         }
 
     @classmethod
@@ -35,7 +52,9 @@ class SecretaryState(object):
         cls.SUBSCRIBERS = set(doc['subscribers'])
         cls.UPDATES = [tuple(u) for u in doc['updates']]
         cls.NUMBER_MAP = [tuple(nn) for nn in doc['number_map']]
-        cls.DIRTY = True
+        if 'polls' in doc:
+            cls.POLLS = doc['polls']
+        cls.DIRTY = False
 
     @classmethod
     def from_disk(cls):
@@ -62,6 +81,55 @@ class SecretaryState(object):
                 cls.SUBSCRIBERS.add(number)
                 cls.DIRTY = True
                 return True
+
+    @classmethod
+    def add_poll(cls, question, answers):
+        with cls.LOCK:
+            cls.POLLS.append({
+                'question': question,
+                'answers': answers,
+                'responses': {},
+            })
+            cls.DIRTY = True
+            return "Poll: %s\n%s\nReply with answer number to vote" % (question, '\n'.join([
+                '%d: %s' % (i+1, answers[i])
+                for i in range(len(answers))
+            ]))
+
+    @classmethod
+    def get_poll(cls):
+        with cls.LOCK:
+            if len(cls.POLLS) > 0:
+                return copy.deepcopy(cls.POLLS[-1])
+            else :
+                return None
+
+    @classmethod
+    def answer_poll(cls, phone_number, answer_number):
+        with cls.LOCK:
+            if len(cls.POLLS) == 0:
+                return 'There is no poll to answer. Text HELP for help.'
+
+            poll = cls.POLLS[-1]
+
+            if answer_number < 1 or answer_number > len(poll['answers']):
+                return 'Poll answers range from %d to %d.. sorry.' % (1, len(poll['answers']))
+
+            # 0 base
+            answer_number -= 1
+
+            existing_answer = poll['responses'].get(phone_number)
+
+            if existing_answer is None:
+                poll['responses'][phone_number] = answer_number
+                cls.DIRTY = True
+                return 'OK!'
+            elif existing_answer == answer_number:
+                return 'That was already your answer :)'
+            else :
+                poll['responses'][phone_number] = answer_number
+                cls.DIRTY = True
+                return 'OK, changed your answer!'
 
     @classmethod
     def subscriber_count(cls):
@@ -192,6 +260,53 @@ class TwilioSecretary(twilio_api.Twilio):
             else:
                 print 'nothing to write, no change'
 
+    def broadcast_msg(self, argument):
+        sent = 0
+        failed_send = 0
+        for sub_number in SecretaryState.SUBSCRIBERS:
+            try:
+                self.send_sms(sub_number, argument)
+                sent += 1
+            except:
+                # TODO Log exception
+                failed_send += 1
+        send_msg = "Sent to %d subscribers." % sent
+        if failed_send > 0:
+            send_msg += " Failed to send to %d." % failed_send
+
+        return send_msg
+
+    def get_descriptor(self, phone_number):
+        sub_name = SecretaryState.get_number_name(phone_number, generate_name=False)
+        if sub_name is None:
+            return phone_number
+        else:
+            return '%s (%s)' % (sub_name, phone_number)
+
+    def poll_summary(self, detailed=False):
+        current_poll = SecretaryState.get_poll()
+        if current_poll is None:
+            return 'There is no poll to have responses.'
+
+        n_answers = len(current_poll['answers'])
+        respondents = [list() for i in range(n_answers)]
+        for phone_number, answer_number in current_poll['responses'].items():
+            descriptor = self.get_descriptor(phone_number)
+            respondents[answer_number].append(descriptor)
+
+        if detailed:
+            response_text = '\n'.join([
+                '%d: %s: %s' % (anum + 1, current_poll['answers'][anum], ', '.join(respondents[anum]) if respondents[anum] else 'nobody')
+                for anum in range(n_answers)
+            ])
+        else:
+            response_text = '\n'.join([
+                '%d: %s: %d responses' % (anum + 1, current_poll['answers'][anum], len(respondents[anum]))
+                for anum in range(n_answers)
+            ])
+
+        return '%s\n%s' % (current_poll['question'], response_text)
+
     def on_sms(self, from_number, text):
         text = text.strip()
 
@@ -211,7 +326,7 @@ class TwilioSecretary(twilio_api.Twilio):
             if len(tokens) == 2:
                 argument = tokens[1]
 
-            if command in ['update', 'tell', 'rename', 'name', 'subscribers']:
+            if command in ['update', 'tell', 'rename', 'name', 'subscribers', 'poll', 'responses']:
                 if not is_admin:
                     self.send_sms(from_number, "You can't use that feature, sorry.")
                     return
@@ -221,20 +336,14 @@ class TwilioSecretary(twilio_api.Twilio):
                         self.send_sms(from_number, "Hey, give some text after Update to send an update.")
                         return
                     SecretaryState.add_update(argument)
-                    sent = 0
-                    for sub_number in SecretaryState.SUBSCRIBERS:
-                        self.send_sms(sub_number, "Broadcast: " + argument)
-                        sent += 1
-                    self.send_sms(from_number, "Sent update to %d subscribers." % sent)
+
+                    reply_msg = self.broadcast_msg("Broadcast: " + argument)
+                    self.send_sms(from_number, reply_msg)
                     return
                 elif command == 'subscribers':
                     subscribers = []
                     for sub_number in SecretaryState.SUBSCRIBERS:
-                        sub_name = SecretaryState.get_number_name(sub_number, generate_name=False)
-                        if sub_name is None:
-                            sub_name = sub_number
-                        else:
-                            sub_name = '%s (%s)' % (sub_name, sub_number)
+                        sub_name = self.get_descriptor(sub_number)
                         subscribers.append(sub_name)
 
                     if not subscribers:
@@ -249,6 +358,25 @@ class TwilioSecretary(twilio_api.Twilio):
                         else:
                             sub_text += ', ' + subscriber
                     self.send_sms(from_number, sub_text)
+                    return
+                elif command == 'poll':
+                    if argument is None:
+                        self.send_sms(from_number, "Usage: poll question text? answer1 / answer2/answer3")
+                        return
+
+                    last_q = argument.rfind('?')
+                    question = argument[:last_q+1]
+                    answers = [a.strip() for a in argument[last_q+1:].split('/')]
+                    poll_msg = SecretaryState.add_poll(question, answers)
+                    reply_msg = self.broadcast_msg(poll_msg)
+                    self.send_sms(from_number, reply_msg)
+                    return
+                elif command == 'responses':
+                    detailed = False
+                    if argument :
+                        if argument.strip().lower() == 'detail':
+                            detailed = True
+                    self.send_sms(from_number, self.poll_summary(detailed=detailed))
                     return
                 elif command in ['tell', 'rename', 'name']:
                     arguments_needed = {
@@ -310,6 +438,10 @@ class TwilioSecretary(twilio_api.Twilio):
                     self.send_sms(from_number, "You are now unsubscribed!")
                 else:
                     self.send_sms(from_number, "You are already unsubscribed!")
+                return
+            elif re.compile('^[0-9]+$').match(command):
+                answer_number = int(command)
+                self.send_sms(from_number, SecretaryState.answer_poll(from_number, answer_number))
                 return
 
         help_text = 'Text options:\nSUBSCRIBE (Get text updates)\nMSG [Followed by message for %s]\nSTOP (Stop text updates)' % self.settings[
