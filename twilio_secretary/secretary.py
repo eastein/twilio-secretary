@@ -239,7 +239,7 @@ class TwilioSecretary(twilio_api.Twilio):
 
                     sub_text = subscribers[0]
                     for subscriber in subscribers[1:]:
-                        if sub_text + len(subscriber) + 2 > 160:
+                        if len(sub_text) + len(subscriber) + 2 > 160:
                             self.send_sms(from_number, sub_text)
                             sub_text = subscriber
                         else:
