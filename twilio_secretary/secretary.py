@@ -3,6 +3,7 @@ import random
 import time
 import twilio_api
 import os
+import re
 
 import json
 import threading
@@ -192,6 +193,8 @@ class TwilioSecretary(twilio_api.Twilio):
                 print 'nothing to write, no change'
 
     def on_sms(self, from_number, text):
+        text = text.strip()
+
         print 'hey handling text from %s, text is %s' % (from_number, text)
 
         send_help = False
@@ -202,7 +205,8 @@ class TwilioSecretary(twilio_api.Twilio):
             send_help = True
 
         if not send_help:
-            command = tokens[0].lower()
+            command = re.compile('[^a-zA-Z0-9]').sub('', tokens[0].lower())
+
             argument = None
             if len(tokens) == 2:
                 argument = tokens[1]
