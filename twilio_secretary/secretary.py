@@ -83,18 +83,23 @@ class SecretaryState(object):
                 return True
 
     @classmethod
+    def poll_text(cls, poll_structure):
+        return "Poll: %s\n%s\nReply with answer number to vote" % (poll_structure['question'], '\n'.join([
+            '%d: %s' % (i + 1, poll_structure['answers'][i])
+            for i in range(len(poll_structure['answers']))
+        ]))
+
+    @classmethod
     def add_poll(cls, question, answers):
         with cls.LOCK:
-            cls.POLLS.append({
+            poll_structure = {
                 'question': question,
                 'answers': answers,
                 'responses': {},
-            })
+            }
+            cls.POLLS.append(poll_structure)
             cls.DIRTY = True
-            return "Poll: %s\n%s\nReply with answer number to vote" % (question, '\n'.join([
-                '%d: %s' % (i + 1, answers[i])
-                for i in range(len(answers))
-            ]))
+            return cls.poll_text(poll_structure)
 
     @classmethod
     def get_poll(cls):
@@ -380,6 +385,10 @@ class TwilioSecretary(twilio_api.Twilio):
                     last_q = argument.rfind('?')
                     question = argument[:last_q + 1]
                     answers = [a.strip() for a in argument[last_q + 1:].split('/')]
+                    if len(answers) < 2:
+                        self.send_sms(from_number, "You need at least 2 answers for the polll.")
+                        return
+
                     poll_msg = SecretaryState.add_poll(question, answers)
                     reply_msg = self.broadcast_msg(poll_msg)
                     self.send_sms(from_number, reply_msg)
@@ -444,6 +453,10 @@ class TwilioSecretary(twilio_api.Twilio):
             elif command == 'subscribe':
                 if SecretaryState.add_subscriber(from_number):
                     self.send_sms(from_number, "Subscribed. Current info: %s" % SecretaryState.current_update())
+                    poll_structure = SecretaryState.get_poll()
+                    if poll_structure is not None:
+                        if from_number not in poll_structure['responses']:
+                            self.send_sms(from_number, SecretaryState.poll_text(poll_structure))
                 else:
                     self.send_sms(from_number, "You are already subscribed!")
                 return
