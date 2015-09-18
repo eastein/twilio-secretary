@@ -92,7 +92,7 @@ class SecretaryState(object):
             })
             cls.DIRTY = True
             return "Poll: %s\n%s\nReply with answer number to vote" % (question, '\n'.join([
-                '%d: %s' % (i+1, answers[i])
+                '%d: %s' % (i + 1, answers[i])
                 for i in range(len(answers))
             ]))
 
@@ -101,7 +101,7 @@ class SecretaryState(object):
         with cls.LOCK:
             if len(cls.POLLS) > 0:
                 return copy.deepcopy(cls.POLLS[-1])
-            else :
+            else:
                 return None
 
     @classmethod
@@ -126,7 +126,7 @@ class SecretaryState(object):
                 return 'OK!'
             elif existing_answer == answer_number:
                 return 'That was already your answer :)'
-            else :
+            else:
                 poll['responses'][phone_number] = answer_number
                 cls.DIRTY = True
                 return 'OK, changed your answer!'
@@ -220,6 +220,18 @@ class SecretaryState(object):
         return True
 
     @classmethod
+    def sanitize_number(cls, num):
+        num = re.compile('[^0-9]').sub('', num)
+        nlen = len(num)
+        if nlen < 11:
+            return num
+
+        if nlen == 11 and num[0] == '1':
+            return num[1:]
+
+        return num
+
+    @classmethod
     def get_name_number(cls, name):
         for (stored_number, stored_name) in cls.NUMBER_MAP:
             if name.lower() == stored_name.lower():
@@ -296,7 +308,8 @@ class TwilioSecretary(twilio_api.Twilio):
 
         if detailed:
             response_text = '\n'.join([
-                '%d: %s: %s' % (anum + 1, current_poll['answers'][anum], ', '.join(respondents[anum]) if respondents[anum] else 'nobody')
+                '%d: %s: %s' % (anum + 1, current_poll['answers'][anum],
+                                ', '.join(respondents[anum]) if respondents[anum] else 'nobody')
                 for anum in range(n_answers)
             ])
         else:
@@ -365,15 +378,15 @@ class TwilioSecretary(twilio_api.Twilio):
                         return
 
                     last_q = argument.rfind('?')
-                    question = argument[:last_q+1]
-                    answers = [a.strip() for a in argument[last_q+1:].split('/')]
+                    question = argument[:last_q + 1]
+                    answers = [a.strip() for a in argument[last_q + 1:].split('/')]
                     poll_msg = SecretaryState.add_poll(question, answers)
                     reply_msg = self.broadcast_msg(poll_msg)
                     self.send_sms(from_number, reply_msg)
                     return
                 elif command == 'responses':
                     detailed = False
-                    if argument :
+                    if argument:
                         if argument.strip().lower() == 'detail':
                             detailed = True
                     self.send_sms(from_number, self.poll_summary(detailed=detailed))
@@ -412,6 +425,7 @@ class TwilioSecretary(twilio_api.Twilio):
                         return
                     elif command == 'name':
                         number, name = frags
+                        number = SecretaryState.sanitize_number(number)
                         name = name.split(' ', 1)[0]  # in case we have a space in a name, cut it
                         if SecretaryState.name(number, name):
                             self.send_sms(from_number, "Stored name %s for number %s." % (name, number))
